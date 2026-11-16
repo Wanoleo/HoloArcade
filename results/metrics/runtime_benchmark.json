@@ -1,0 +1,10 @@
+{
+  "frames_measured": 60,
+  "resolution": "960x540",
+  "model_file": "best_model.joblib",
+  "measured_fps": 30.8,
+  "avg_frame_ms": 32.46,
+  "avg_hand_tracker_ms": 13.31,
+  "avg_ml_inference_ms": 0.0,
+  "hand_detected_frames": 0
+}
