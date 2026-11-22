@@ -8,11 +8,29 @@ import time
 
 import pygame
 
-from src.config import PROJECT_ROOT
+from src.board_game import (
+    CANVAS_BOX,
+    KEYBOARD_BUTTONS,
+    PEN_COLORS,
+    TEXT_DISPLAY_BOX,
+    TOOLBAR_BOX,
+    TOOLBAR_BUTTONS,
+    BoardState,
+)
+from src.config import PROJECT_ROOT, RESULTS_PLOTS_DIR
+from src.report_view import (
+    BACK_HUB_BOX,
+    EXPORT_HTML_BOX,
+    MODEL_SELECT_BOXES,
+    TAB_BOXES,
+    ReportData,
+    ReportState,
+)
 from src.game_logic import (
     CHEST_CLEAR_BOX,
     CHEST_PAD_BOXES,
     CHEST_PAD_VALUES,
+    EXIT_CLEAR_BOX,
     EXIT_DOOR_POS,
     EXIT_PAD_BOXES,
     EXIT_PAD_VALUES,
@@ -31,8 +49,10 @@ from src.gesture_recognition import GesturePrediction
 from src.soccer_game import SoccerState
 
 
-HUB_ESCAPE_BOX = (0.10, 0.25, 0.36, 0.52)
-HUB_SOCCER_BOX = (0.54, 0.25, 0.36, 0.52)
+HUB_ESCAPE_BOX = (0.055, 0.24, 0.27, 0.49)
+HUB_SOCCER_BOX = (0.365, 0.24, 0.27, 0.49)
+HUB_BOARD_BOX = (0.675, 0.24, 0.27, 0.49)
+HUB_REPORT_BOX = (0.29, 0.785, 0.42, 0.085)
 
 ESCAPE_BG_PATH = PROJECT_ROOT / "assets" / "images" / "escape_room_bg.png"
 SOCCER_BG_PATH = PROJECT_ROOT / "assets" / "images" / "soccer_pitch_bg.png"
@@ -107,6 +127,7 @@ class GameRenderer:
         hovered_card: str | None,
         fps: float,
         model_name: str,
+        secondary_prediction: GesturePrediction | None = None,
     ) -> None:
         width, height = screen.get_size()
         bg = self._get_background(ESCAPE_BG_PATH, width, height)
@@ -120,7 +141,7 @@ class GameRenderer:
 
         title = self._font_lg.render("HOLOARCADE", True, (130, 235, 255))
         sub = self._font_sm.render(
-            "Point at a game card + Thumbs Up to launch  (or press 1 / 2)",
+            "Point at a card + Pinch or Thumbs Up to launch  (Keys: 1 / 2 / 3 / 4)",
             True,
             (215, 228, 242),
         )
@@ -132,19 +153,28 @@ class GameRenderer:
                 "escape",
                 HUB_ESCAPE_BOX,
                 ESCAPE_BG_PATH,
-                "1. HOLOESCAPE (POV)",
-                "First-Person Narration Escape",
-                "Decode spoken logs & unlock Sector 4",
+                "1. HOLOESCAPE",
+                "First-Person POV Escape",
+                "Decode clues & unlock Sector 4",
                 (85, 220, 255),
             ),
             (
                 "soccer",
                 HUB_SOCCER_BOX,
                 SOCCER_BG_PATH,
-                "2. HOLOSOCCER (4v4)",
-                "Gesture Stadium Football",
-                "Point to dribble, Two Fingers pass, Fist shoot!",
+                "2. HOLOSOCCER",
+                "Gesture Stadium 4v4",
+                "Point dribble, 2-Fingers pass, Fist shoot",
                 (105, 250, 165),
+            ),
+            (
+                "board",
+                HUB_BOARD_BOX,
+                None,
+                "3. HOLOBOARD",
+                "Air-Draw & Text Board",
+                "Pinch to draw & type on virtual keys",
+                (255, 200, 95),
             ),
         ]
 
@@ -161,10 +191,23 @@ class GameRenderer:
             # Embedded thumbnail preview inside the card
             thumb_w = rect.width - 28
             thumb_h = int(rect.height * 0.54)
-            thumb = self._get_background(thumb_path, thumb_w, thumb_h)
+            thumb = self._get_background(thumb_path, thumb_w, thumb_h) if thumb_path is not None else None
             thumb_rect = pygame.Rect(rect.x + 14, rect.y + 14, thumb_w, thumb_h)
             if thumb is not None:
                 screen.blit(thumb, thumb_rect.topleft)
+            else:
+                pygame.draw.rect(screen, (14, 22, 36), thumb_rect, border_radius=8)
+                # Stylized neon air-drawing preview inside the HoloBoard card
+                cx, cy = thumb_rect.center
+                pygame.draw.lines(
+                    screen,
+                    (90, 240, 255),
+                    False,
+                    [(cx - 55, cy + 12), (cx - 25, cy - 22), (cx + 10, cy + 14), (cx + 48, cy - 18)],
+                    3,
+                )
+                kb_prev = self._font_md.render("A  B  C  ...", True, (255, 205, 95))
+                screen.blit(kb_prev, (cx - kb_prev.get_width() // 2, thumb_rect.bottom - 34))
             pygame.draw.rect(screen, accent if is_hov else (70, 95, 130), thumb_rect, 2, border_radius=8)
 
             pygame.draw.rect(
@@ -183,7 +226,33 @@ class GameRenderer:
             screen.blit(t_surf, (rect.x + 18, text_y + 30))
             screen.blit(d_surf, (rect.x + 18, text_y + 56))
 
-        self._draw_status_strip(screen, width, "Select a Game", prediction, fps, model_name)
+        # 4. Model Evaluation Report Button
+        rep_rect = _to_px_rect(HUB_REPORT_BOX, width, height)
+        rep_hov = hovered_card == "report"
+        if rep_hov:
+            _draw_glow(screen, rep_rect.center, rep_rect.width // 2, (165, 130, 255), alpha=65)
+        rep_surf = pygame.Surface((rep_rect.width, rep_rect.height), pygame.SRCALPHA)
+        rep_surf.fill((36, 30, 62, 232) if rep_hov else (22, 24, 42, 215))
+        screen.blit(rep_surf, rep_rect.topleft)
+        pygame.draw.rect(
+            screen,
+            (185, 155, 255) if rep_hov else (110, 125, 175),
+            rep_rect,
+            3 if rep_hov else 2,
+            border_radius=12,
+        )
+        rep_lbl = self._font_md.render("4. MODEL EVALUATION & REPORT", True, (240, 235, 255))
+        screen.blit(rep_lbl, (rep_rect.centerx - rep_lbl.get_width() // 2, rep_rect.centery - rep_lbl.get_height() // 2))
+
+        self._draw_status_strip(
+            screen,
+            width,
+            "Select a Game",
+            prediction,
+            fps,
+            model_name,
+            secondary_prediction=secondary_prediction,
+        )
         self._draw_webcam_pip(screen, camera_surface, width, height)
         self._draw_pointer(screen, width, height, pointer_xy, prediction.smoothed_label)
 
@@ -199,6 +268,7 @@ class GameRenderer:
         pointer_xy: tuple[float, float] | None,
         fps: float,
         model_name: str,
+        secondary_prediction: GesturePrediction | None = None,
     ) -> None:
         width, height = screen.get_size()
         t = time.monotonic()
@@ -249,9 +319,18 @@ class GameRenderer:
             prediction,
             fps,
             model_name,
+            secondary_prediction=secondary_prediction,
         )
         self._draw_webcam_pip(screen, camera_surface, width, height)
-        self._draw_pov_reticle(screen, width, height, pointer_xy, prediction.smoothed_label, state.nearby_station)
+        self._draw_pov_reticle(
+            screen,
+            width,
+            height,
+            pointer_xy,
+            prediction.smoothed_label,
+            state.nearby_station,
+            dwell_progress=state.dwell_progress,
+        )
         self._draw_narration_and_feedback(screen, width, height, state)
 
     def _pov_px(
@@ -392,35 +471,64 @@ class GameRenderer:
             pygame.draw.polygon(screen, core_col, diamond)
             pygame.draw.polygon(screen, (255, 255, 255), diamond, 2)
 
-        # 6. Interactive NPC: Dr. Vance
+        # 6. Interactive NPC: Dr. Vance (Detailed Sci-Fi Engineer Character Model)
         nx, ny = self._pov_px(NPC_POS, width, height, state, pointer_xy, bob_x, bob_y)
         near_npc = state.nearby_station == "npc"
         npc_col = (120, 255, 190) if near_npc else (110, 210, 255)
-        idle_bob = int(math.sin(time.monotonic() * 2.5) * 3)
-        sh_w, sh_h = int(52 * scale), int(16 * scale)
-        sh_s = pygame.Surface((sh_w, sh_h), pygame.SRCALPHA)
-        pygame.draw.ellipse(sh_s, (4, 6, 12, 165), sh_s.get_rect())
-        screen.blit(sh_s, (nx - sh_w // 2, ny + int(34 * scale)))
-        if near_npc:
-            _draw_glow(screen, (nx, ny - int(10 * scale)), int(62 * scale), (110, 255, 190), alpha=75)
+        t_now = time.monotonic()
+        idle_bob = int(math.sin(t_now * 2.5) * 3)
+        arm_sway = int(math.cos(t_now * 2.0) * 2)
 
-        # Tactical coat torso + shoulders
-        torso_w, torso_h = int(34 * scale), int(48 * scale)
-        torso = pygame.Rect(nx - torso_w // 2, ny - int(14 * scale) + idle_bob, torso_w, torso_h)
-        pygame.draw.rect(screen, (30, 42, 62), torso, border_radius=8)
-        pygame.draw.rect(screen, npc_col, torso, 2, border_radius=8)
-        # Head + glowing AR visor
-        hr = max(10, int(13 * scale))
+        sh_w, sh_h = int(60 * scale), int(18 * scale)
+        sh_s = pygame.Surface((sh_w, sh_h), pygame.SRCALPHA)
+        pygame.draw.ellipse(sh_s, (4, 6, 12, 175), sh_s.get_rect())
+        screen.blit(sh_s, (nx - sh_w // 2, ny + int(42 * scale)))
+        if near_npc:
+            _draw_glow(screen, (nx, ny - int(6 * scale)), int(70 * scale), (110, 255, 190), alpha=80)
+
+        # Legs & armored boots
+        leg_w = max(6, int(9 * scale))
+        leg_h = int(24 * scale)
+        hip_y = ny + int(18 * scale) + idle_bob
+        pygame.draw.rect(screen, (22, 30, 44), pygame.Rect(nx - int(11 * scale), hip_y, leg_w, leg_h), border_radius=3)
+        pygame.draw.rect(screen, (22, 30, 44), pygame.Rect(nx + int(2 * scale), hip_y, leg_w, leg_h), border_radius=3)
+        pygame.draw.rect(screen, (60, 80, 108), pygame.Rect(nx - int(12 * scale), hip_y + leg_h - int(6 * scale), leg_w + 3, int(7 * scale)), border_radius=3)
+        pygame.draw.rect(screen, (60, 80, 108), pygame.Rect(nx + int(1 * scale), hip_y + leg_h - int(6 * scale), leg_w + 3, int(7 * scale)), border_radius=3)
+
+        # Tactical lab coat torso + shoulder pads + glowing chest core
+        torso_w, torso_h = int(38 * scale), int(46 * scale)
+        torso = pygame.Rect(nx - torso_w // 2, ny - int(22 * scale) + idle_bob, torso_w, torso_h)
+        pygame.draw.rect(screen, (32, 46, 68), torso, border_radius=9)
+        pygame.draw.rect(screen, npc_col, torso, 2, border_radius=9)
+        # Lab coat lapel V-trim & glowing badge
+        pygame.draw.line(screen, (180, 225, 255), (nx, torso.top + int(4 * scale)), (nx, torso.bottom - int(6 * scale)), 2)
+        pygame.draw.circle(screen, npc_col, (nx + int(8 * scale), torso.top + int(15 * scale)), max(3, int(4 * scale)))
+
+        # Left & right arms (right arm holds a glowing holo-tablet)
+        l_arm = pygame.Rect(torso.left - int(8 * scale), torso.top + int(6 * scale) + arm_sway, int(8 * scale), int(28 * scale))
+        r_arm = pygame.Rect(torso.right, torso.top + int(6 * scale) - arm_sway, int(8 * scale), int(26 * scale))
+        pygame.draw.rect(screen, (40, 56, 82), l_arm, border_radius=4)
+        pygame.draw.rect(screen, (40, 56, 82), r_arm, border_radius=4)
+        tablet = pygame.Rect(r_arm.left - int(6 * scale), r_arm.bottom - int(10 * scale), int(16 * scale), int(12 * scale))
+        pygame.draw.rect(screen, (18, 42, 60), tablet, border_radius=3)
+        pygame.draw.rect(screen, (95, 240, 255), tablet, 2, border_radius=3)
+
+        # Head + hair + glowing AR visor
+        hr = max(11, int(14 * scale))
         hy = torso.top - hr + int(2 * scale)
-        pygame.draw.circle(screen, (220, 185, 160), (nx, hy), hr)
-        pygame.draw.rect(
-            screen,
-            npc_col,
-            pygame.Rect(nx - hr + 2, hy - 3, (hr - 2) * 2, max(4, int(5 * scale))),
-            border_radius=3,
-        )
+        pygame.draw.circle(screen, (224, 188, 162), (nx, hy), hr)
+        # Hair / cap silhouette
+        pygame.draw.arc(screen, (45, 52, 66), pygame.Rect(nx - hr - 1, hy - hr - 1, (hr + 1) * 2, hr * 2), 0.2, math.pi - 0.2, max(3, int(5 * scale)))
+        # Glowing AR visor
+        visor_rect = pygame.Rect(nx - hr + 2, hy - int(3 * scale), (hr - 2) * 2, max(5, int(6 * scale)))
+        pygame.draw.rect(screen, (16, 36, 52), visor_rect, border_radius=3)
+        pygame.draw.rect(screen, npc_col, visor_rect, 2, border_radius=3)
+
         tag = self._font_xs.render("DR. VANCE", True, npc_col)
-        screen.blit(tag, (nx - tag.get_width() // 2, hy - hr - 20))
+        screen.blit(tag, (nx - tag.get_width() // 2, hy - hr - 22))
+        if near_npc and not state.npc_dialog_open:
+            prompt = self._font_xs.render("Pinch / Thumbs Up to Talk", True, (255, 240, 175))
+            screen.blit(prompt, (nx - prompt.get_width() // 2, hy - hr - 38))
 
     def _draw_pov_atmosphere(
         self,
@@ -581,6 +689,7 @@ class GameRenderer:
         pointer_xy: tuple[float, float] | None,
         smoothed_label: str | None,
         nearby_station: str | None,
+        dwell_progress: float = 0.0,
     ) -> None:
         if pointer_xy is None:
             return
@@ -595,11 +704,16 @@ class GameRenderer:
         for dx, dy in ((-20, 0), (20, 0), (0, -20), (0, 20)):
             pygame.draw.line(screen, color, (px + dx // 2, py + dy // 2), (px + dx, py + dy), 2)
 
+        if dwell_progress > 0.02:
+            arc_rect = pygame.Rect(px - 20, py - 20, 40, 40)
+            end_angle = math.pi / 2.0 + dwell_progress * 2.0 * math.pi
+            pygame.draw.arc(screen, (120, 255, 190), arc_rect, math.pi / 2.0, end_angle, 3)
+
         labels = {
-            "npc": "TALK TO DR. VANCE (Thumbs Up)",
-            "terminal": "CIPHER LOG (Thumbs Up)",
-            "safe": "OPEN CHEST (Thumbs Up)",
-            "exit_door": "EXIT KEYPAD (Thumbs Up)",
+            "npc": "TALK TO DR. VANCE (Pinch / Hold)",
+            "terminal": "CIPHER LOG (Pinch / Hold)",
+            "safe": "OPEN CHEST (Pinch / Hold)",
+            "exit_door": "EXIT KEYPAD (Pinch / Hold)",
         }
         if nearby_station in labels:
             tag = self._font_xs.render(labels[nearby_station], True, (140, 255, 190))
@@ -704,6 +818,7 @@ class GameRenderer:
         pointer_xy: tuple[float, float] | None,
         fps: float,
         model_name: str,
+        secondary_prediction: GesturePrediction | None = None,
     ) -> None:
         width, height = screen.get_size()
         t = time.monotonic()
@@ -824,14 +939,418 @@ class GameRenderer:
         )
         screen.blit(sb_txt, (sb_rect.centerx - sb_txt.get_width() // 2, sb_rect.centery - sb_txt.get_height() // 2))
 
-        self._draw_status_strip(screen, width, "HoloSoccer 4v4 (Point/WASD Move | 2-Fingers/E Pass | Fist/Space Shoot)", prediction, fps, model_name)
+        self._draw_status_strip(
+            screen,
+            width,
+            "HoloSoccer 4v4 (Point/WASD Move | 2-Fingers/E Pass | Fist/Space Shoot)",
+            prediction,
+            fps,
+            model_name,
+            secondary_prediction=secondary_prediction,
+        )
         self._draw_webcam_pip(screen, camera_surface, width, height)
         self._draw_pointer(screen, width, height, pointer_xy, prediction.smoothed_label)
 
-        bar = pygame.Surface((width, 42), pygame.SRCALPHA)
-        bar.fill((10, 16, 22, 220))
-        screen.blit(bar, (0, height - 42))
-        screen.blit(self._font_sm.render(state.feedback_message, True, (220, 245, 230)), (16, height - 31))
+    # ------------------------------------------------------------------
+    # HoloBoard (Air-Drawing & Gesture Text Board)
+    # ------------------------------------------------------------------
+    def render_board(
+        self,
+        screen: pygame.Surface,
+        camera_surface: pygame.Surface,
+        state: BoardState,
+        prediction: GesturePrediction,
+        pointer_xy: tuple[float, float] | None,
+        fps: float,
+        model_name: str,
+        secondary_prediction: GesturePrediction | None = None,
+    ) -> None:
+        width, height = screen.get_size()
+        screen.fill((11, 16, 26))
+
+        # Toolbar strip
+        tb_rect = _to_px_rect(TOOLBAR_BOX, width, height)
+        pygame.draw.rect(screen, (18, 26, 40), tb_rect, border_radius=8)
+        pygame.draw.rect(screen, (65, 95, 130), tb_rect, 1, border_radius=8)
+        for btn_id, label, box in TOOLBAR_BUTTONS:
+            rect = _to_px_rect(box, width, height)
+            is_hov = state.hovered_target == btn_id
+            if btn_id.startswith("color_"):
+                idx = int(btn_id.split("_")[1])
+                _, swatch = PEN_COLORS[idx]
+                selected = state.color_index == idx
+                pygame.draw.rect(screen, swatch, rect, border_radius=6)
+                pygame.draw.rect(
+                    screen,
+                    (255, 255, 255) if (selected or is_hov) else (40, 50, 68),
+                    rect,
+                    3 if selected else 2,
+                    border_radius=6,
+                )
+            else:
+                bg_col = (52, 92, 138) if is_hov else (28, 42, 64)
+                bd_col = (130, 240, 255) if is_hov else (85, 120, 160)
+                pygame.draw.rect(screen, bg_col, rect, border_radius=6)
+                pygame.draw.rect(screen, bd_col, rect, 2, border_radius=6)
+                txt = self._font_xs.render(label, True, (240, 248, 255))
+                screen.blit(txt, (rect.centerx - txt.get_width() // 2, rect.centery - txt.get_height() // 2))
+
+        # Air-Drawing Canvas
+        c_rect = _to_px_rect(CANVAS_BOX, width, height)
+        pygame.draw.rect(screen, (14, 21, 33), c_rect, border_radius=10)
+        # Subtle grid lines
+        for gx in range(c_rect.left + 40, c_rect.right, 40):
+            pygame.draw.line(screen, (22, 33, 50), (gx, c_rect.top), (gx, c_rect.bottom), 1)
+        for gy in range(c_rect.top + 40, c_rect.bottom, 40):
+            pygame.draw.line(screen, (22, 33, 50), (c_rect.left, gy), (c_rect.right, gy), 1)
+        pygame.draw.rect(
+            screen,
+            (105, 225, 255) if state.active_stroke is not None else (75, 115, 155),
+            c_rect,
+            2,
+            border_radius=10,
+        )
+
+        # Render completed + active air-drawn strokes
+        all_strokes = [*state.strokes]
+        if state.active_stroke is not None:
+            all_strokes.append(state.active_stroke)
+        for stroke in all_strokes:
+            if not stroke.points:
+                continue
+            pts_px = [_to_px(p, width, height) for p in stroke.points]
+            if len(pts_px) == 1:
+                pygame.draw.circle(screen, stroke.color, pts_px[0], stroke.width)
+            else:
+                pygame.draw.lines(screen, stroke.color, False, pts_px, stroke.width * 2)
+                for pt in pts_px:
+                    pygame.draw.circle(screen, stroke.color, pt, stroke.width)
+
+        # Typed Text Display Bar
+        td_rect = _to_px_rect(TEXT_DISPLAY_BOX, width, height)
+        pygame.draw.rect(screen, (16, 25, 40), td_rect, border_radius=8)
+        pygame.draw.rect(screen, (110, 215, 255), td_rect, 2, border_radius=8)
+        cursor_ch = "_" if int(time.monotonic() * 2) % 2 == 0 else " "
+        disp_str = (state.text + cursor_ch) if state.text else f"Typed text appears here...{cursor_ch}"
+        disp_col = (245, 250, 255) if state.text else (130, 155, 185)
+        disp_surf = self._font_md.render(disp_str, True, disp_col)
+        screen.blit(disp_surf, (td_rect.left + 14, td_rect.centery - disp_surf.get_height() // 2))
+
+        # Virtual Gesture Keyboard
+        for btn_id, label, box in KEYBOARD_BUTTONS:
+            rect = _to_px_rect(box, width, height)
+            is_hov = state.hovered_target == btn_id
+            is_action = label in ("BACK", "CLR", "SPACE")
+            bg_col = (60, 115, 175) if is_hov else ((38, 52, 76) if is_action else (24, 36, 56))
+            bd_col = (130, 245, 255) if is_hov else (85, 115, 155)
+            pygame.draw.rect(screen, bg_col, rect, border_radius=6)
+            pygame.draw.rect(screen, bd_col, rect, 3 if is_hov else 1, border_radius=6)
+            k_surf = self._font_sm.render(label, True, (255, 255, 255))
+            screen.blit(k_surf, (rect.centerx - k_surf.get_width() // 2, rect.centery - k_surf.get_height() // 2))
+
+        self._draw_status_strip(
+            screen,
+            width,
+            "HoloBoard (Pinch to Draw | Pinch / Hold Point on Keys to Type)",
+            prediction,
+            fps,
+            model_name,
+            secondary_prediction=secondary_prediction,
+        )
+        self._draw_webcam_pip(screen, camera_surface, width, height)
+        self._draw_pointer(screen, width, height, pointer_xy, prediction.smoothed_label)
+
+    # ------------------------------------------------------------------
+    # Model Evaluation & Report Dashboard
+    # ------------------------------------------------------------------
+    def render_report(
+        self,
+        screen: pygame.Surface,
+        camera_surface: pygame.Surface,
+        data: ReportData,
+        state: ReportState,
+        prediction: GesturePrediction,
+        pointer_xy: tuple[float, float] | None,
+        fps: float,
+        model_name: str,
+        secondary_prediction: GesturePrediction | None = None,
+    ) -> None:
+        width, height = screen.get_size()
+        screen.fill((11, 16, 26))
+
+        # Top tab bar + Export HTML + Back
+        tab_map = {"tab_overview": "overview", "tab_classes": "classes", "tab_runtime": "runtime"}
+        for btn_id, label, box in TAB_BOXES:
+            rect = _to_px_rect(box, width, height)
+            is_active = state.active_tab == tab_map[btn_id]
+            is_hov = state.hovered_target == btn_id
+            bg = (45, 95, 145) if is_active else ((34, 62, 98) if is_hov else (20, 30, 48))
+            bd = (130, 245, 255) if (is_active or is_hov) else (75, 105, 145)
+            pygame.draw.rect(screen, bg, rect, border_radius=8)
+            pygame.draw.rect(screen, bd, rect, 3 if is_active else 2, border_radius=8)
+            txt = self._font_xs.render(label, True, (255, 255, 255))
+            screen.blit(txt, (rect.centerx - txt.get_width() // 2, rect.centery - txt.get_height() // 2))
+
+        for btn_id, label, box, base_col in (
+            ("export_html", "EXPORT HTML", EXPORT_HTML_BOX, (36, 92, 72)),
+            ("back_hub", "BACK", BACK_HUB_BOX, (105, 48, 56)),
+        ):
+            rect = _to_px_rect(box, width, height)
+            is_hov = state.hovered_target == btn_id
+            pygame.draw.rect(screen, tuple(min(255, c + 30) for c in base_col) if is_hov else base_col, rect, border_radius=8)
+            pygame.draw.rect(screen, (200, 245, 255) if is_hov else (130, 160, 195), rect, 2, border_radius=8)
+            txt = self._font_xs.render(label, True, (255, 255, 255))
+            screen.blit(txt, (rect.centerx - txt.get_width() // 2, rect.centery - txt.get_height() // 2))
+
+        if state.active_tab == "overview":
+            self._draw_report_overview(screen, width, height, data)
+        elif state.active_tab == "classes":
+            self._draw_report_classes(screen, width, height, data, state)
+        else:
+            self._draw_report_runtime(screen, width, height, data)
+
+        # Bottom status bar
+        foot = pygame.Rect(int(width * 0.04), int(height * 0.90), int(width * 0.72), int(height * 0.065))
+        pygame.draw.rect(screen, (16, 24, 38), foot, border_radius=8)
+        pygame.draw.rect(screen, (75, 110, 150), foot, 1, border_radius=8)
+        f_txt = self._font_xs.render(state.status_message, True, (215, 235, 250))
+        screen.blit(f_txt, (foot.left + 12, foot.centery - f_txt.get_height() // 2))
+
+        self._draw_status_strip(
+            screen,
+            width,
+            "Model Evaluation Report (Pinch / Hold Point on Tabs | M or Fist = Hub)",
+            prediction,
+            fps,
+            model_name,
+            secondary_prediction=secondary_prediction,
+        )
+        self._draw_webcam_pip(screen, camera_surface, width, height)
+        self._draw_pointer(screen, width, height, pointer_xy, prediction.smoothed_label)
+        if pointer_xy is not None and state.dwell_progress > 0.02:
+            px, py = _to_px(pointer_xy, width, height)
+            arc_rect = pygame.Rect(px - 18, py - 18, 36, 36)
+            pygame.draw.arc(screen, (120, 255, 190), arc_rect, math.pi / 2.0, math.pi / 2.0 + state.dwell_progress * 2.0 * math.pi, 3)
+
+    def _draw_table_row(
+        self,
+        screen: pygame.Surface,
+        rect: pygame.Rect,
+        y: int,
+        cols: list[tuple[str, float, str]],
+        color: tuple[int, int, int],
+        stripe: bool = False,
+        row_h: int = 26,
+    ) -> int:
+        """Draw a crisp column-aligned table row inside `rect` and return next y."""
+        if stripe:
+            pygame.draw.rect(
+                screen,
+                (22, 33, 50),
+                pygame.Rect(rect.left + 10, y - 3, rect.width - 20, row_h),
+                border_radius=4,
+            )
+        inner_w = rect.width - 28
+        for text, frac, align in cols:
+            surf = self._font_xs.render(text, True, color)
+            x = rect.left + 14 + int(inner_w * frac)
+            if align == "right":
+                x -= surf.get_width()
+            screen.blit(surf, (x, y))
+        return y + row_h
+
+    def _draw_report_overview(self, screen: pygame.Surface, width: int, height: int, data: ReportData) -> None:
+        # Left card: Dataset & Model Comparison table
+        left = pygame.Rect(int(width * 0.04), int(height * 0.20), int(width * 0.50), int(height * 0.67))
+        pygame.draw.rect(screen, (16, 24, 38), left, border_radius=10)
+        pygame.draw.rect(screen, (75, 115, 160), left, 1, border_radius=10)
+
+        y = left.top + 14
+        screen.blit(self._font_md.render("DATASET & MODEL COMPARISON", True, (130, 235, 255)), (left.left + 14, y))
+        y += 32
+        summary_lines = [
+            f"Selected Best Model : {data.selected_model.upper()} (models/best_model.joblib)",
+            f"Raw Dataset Samples : {data.total_raw_samples} across {len(data.session_counts)} sessions",
+            f"Train / Test Split  : {data.train_samples} train / {data.test_samples} test (session-grouped)",
+            f"Handedness Balance  : " + ", ".join(f"{k}={v}" for k, v in sorted(data.handedness_counts.items())),
+        ]
+        for line in summary_lines:
+            screen.blit(self._font_xs.render(line, True, (220, 235, 248)), (left.left + 14, y))
+            y += 23
+
+        y += 16
+        col_specs = [0.00, 0.42, 0.56, 0.70, 0.84, 0.99]
+        y = self._draw_table_row(
+            screen,
+            left,
+            y,
+            [
+                ("MODEL", col_specs[0], "left"),
+                ("ACC", col_specs[1], "right"),
+                ("PREC", col_specs[2], "right"),
+                ("REC", col_specs[3], "right"),
+                ("F1", col_specs[4], "right"),
+                ("MS", col_specs[5], "right"),
+            ],
+            color=(130, 245, 200),
+            row_h=24,
+        )
+        pygame.draw.line(screen, (60, 88, 125), (left.left + 12, y - 4), (left.right - 12, y - 4), 1)
+        for r_idx, row in enumerate(data.comparison_rows):
+            m = row.get("model", "").upper()
+            is_best = row.get("model", "") == data.selected_model
+            col = (255, 230, 120) if is_best else (230, 240, 250)
+            y = self._draw_table_row(
+                screen,
+                left,
+                y,
+                [
+                    (m, col_specs[0], "left"),
+                    (f"{float(row.get('accuracy', 0)):.2%}", col_specs[1], "right"),
+                    (f"{float(row.get('precision_macro', 0)):.4f}", col_specs[2], "right"),
+                    (f"{float(row.get('recall_macro', 0)):.4f}", col_specs[3], "right"),
+                    (f"{float(row.get('f1_macro', 0)):.4f}", col_specs[4], "right"),
+                    (f"{float(row.get('latency_ms_per_sample', 0)):.4f}", col_specs[5], "right"),
+                ],
+                color=col,
+                stripe=(r_idx % 2 == 0),
+                row_h=28,
+            )
+
+        # Right card: Model Comparison Plot
+        right = pygame.Rect(int(width * 0.56), int(height * 0.20), int(width * 0.40), int(height * 0.67))
+        pygame.draw.rect(screen, (16, 24, 38), right, border_radius=10)
+        pygame.draw.rect(screen, (75, 115, 160), right, 1, border_radius=10)
+        plot = self._get_background(RESULTS_PLOTS_DIR / "model_comparison.png", right.width - 16, right.height - 44)
+        screen.blit(self._font_sm.render("ACCURACY / F1 / RECALL CHART", True, (130, 235, 255)), (right.left + 12, right.top + 10))
+        if plot is not None:
+            screen.blit(plot, (right.left + 8, right.top + 36))
+
+    def _draw_report_classes(
+        self,
+        screen: pygame.Surface,
+        width: int,
+        height: int,
+        data: ReportData,
+        state: ReportState,
+    ) -> None:
+        for btn_id, label, box in MODEL_SELECT_BOXES:
+            rect = _to_px_rect(box, width, height)
+            mname = btn_id[6:]
+            is_sel = state.selected_model == mname
+            is_hov = state.hovered_target == btn_id
+            bg = (55, 115, 165) if is_sel else ((38, 70, 108) if is_hov else (22, 34, 52))
+            bd = (130, 255, 195) if is_sel else (85, 115, 155)
+            pygame.draw.rect(screen, bg, rect, border_radius=7)
+            pygame.draw.rect(screen, bd, rect, 2, border_radius=7)
+            txt = self._font_xs.render(label, True, (255, 255, 255))
+            screen.blit(txt, (rect.centerx - txt.get_width() // 2, rect.centery - txt.get_height() // 2))
+
+        # Left table: per-class precision/recall/f1/support
+        left = pygame.Rect(int(width * 0.04), int(height * 0.275), int(width * 0.49), int(height * 0.595))
+        pygame.draw.rect(screen, (16, 24, 38), left, border_radius=10)
+        pygame.draw.rect(screen, (75, 115, 160), left, 1, border_radius=10)
+        rep = data.classification_reports.get(state.selected_model, {})
+        y = left.top + 14
+        screen.blit(
+            self._font_sm.render(f"PER-CLASS METRICS — {state.selected_model.upper()}", True, (130, 235, 255)),
+            (left.left + 14, y),
+        )
+        y += 30
+        col_specs = [0.00, 0.42, 0.60, 0.78, 0.99]
+        y = self._draw_table_row(
+            screen,
+            left,
+            y,
+            [
+                ("GESTURE", col_specs[0], "left"),
+                ("PREC", col_specs[1], "right"),
+                ("REC", col_specs[2], "right"),
+                ("F1", col_specs[3], "right"),
+                ("SUPP", col_specs[4], "right"),
+            ],
+            color=(130, 245, 200),
+            row_h=24,
+        )
+        pygame.draw.line(screen, (60, 88, 125), (left.left + 12, y - 4), (left.right - 12, y - 4), 1)
+        classes = data.classes or ("fist", "open_palm", "pinch", "pointing", "thumbs_up", "two_fingers")
+        for r_idx, cls_name in enumerate(classes):
+            m = rep.get(cls_name, {})
+            y = self._draw_table_row(
+                screen,
+                left,
+                y,
+                [
+                    (cls_name, col_specs[0], "left"),
+                    (f"{m.get('precision', 0):.4f}", col_specs[1], "right"),
+                    (f"{m.get('recall', 0):.4f}", col_specs[2], "right"),
+                    (f"{m.get('f1-score', 0):.4f}", col_specs[3], "right"),
+                    (f"{int(m.get('support', 0))}", col_specs[4], "right"),
+                ],
+                color=(230, 240, 250),
+                stripe=(r_idx % 2 == 0),
+                row_h=27,
+            )
+
+        macro = rep.get("macro avg", {})
+        if macro:
+            y += 4
+            pygame.draw.line(screen, (60, 88, 125), (left.left + 12, y - 2), (left.right - 12, y - 2), 1)
+            y = self._draw_table_row(
+                screen,
+                left,
+                y + 4,
+                [
+                    (f"MACRO AVG (Acc {rep.get('accuracy', 0):.2%})", col_specs[0], "left"),
+                    (f"{macro.get('precision', 0):.4f}", col_specs[1], "right"),
+                    (f"{macro.get('recall', 0):.4f}", col_specs[2], "right"),
+                    (f"{macro.get('f1-score', 0):.4f}", col_specs[3], "right"),
+                    (f"{int(macro.get('support', 0))}", col_specs[4], "right"),
+                ],
+                color=(255, 230, 120),
+                row_h=26,
+            )
+
+        # Right card: Confusion matrix PNG
+        right = pygame.Rect(int(width * 0.55), int(height * 0.20), int(width * 0.41), int(height * 0.67))
+        pygame.draw.rect(screen, (16, 24, 38), right, border_radius=10)
+        pygame.draw.rect(screen, (75, 115, 160), right, 1, border_radius=10)
+        cm_path = RESULTS_PLOTS_DIR / f"cm_{state.selected_model}.png"
+        cm_img = self._get_background(cm_path, right.width - 16, right.height - 40)
+        screen.blit(self._font_sm.render(f"CONFUSION MATRIX ({state.selected_model.upper()})", True, (130, 235, 255)), (right.left + 12, right.top + 10))
+        if cm_img is not None:
+            screen.blit(cm_img, (right.left + 8, right.top + 34))
+
+    def _draw_report_runtime(self, screen: pygame.Surface, width: int, height: int, data: ReportData) -> None:
+        left = pygame.Rect(int(width * 0.04), int(height * 0.20), int(width * 0.45), int(height * 0.67))
+        right = pygame.Rect(int(width * 0.51), int(height * 0.20), int(width * 0.45), int(height * 0.67))
+        for box in (left, right):
+            pygame.draw.rect(screen, (16, 24, 38), box, border_radius=10)
+            pygame.draw.rect(screen, (75, 115, 160), box, 1, border_radius=10)
+
+        y = left.top + 14
+        screen.blit(self._font_md.render("RUNTIME BENCHMARK", True, (130, 235, 255)), (left.left + 14, y))
+        y += 36
+        for k, v in data.runtime_benchmark.items():
+            screen.blit(self._font_sm.render(f"{k}: {v}", True, (225, 238, 250)), (left.left + 14, y))
+            y += 28
+
+        y2 = right.top + 14
+        screen.blit(self._font_md.render("ML PIPELINE & SESSIONS", True, (130, 235, 255)), (right.left + 14, y2))
+        y2 += 34
+        pipeline_lines = [
+            "Landmarks : 21 MediaPipe (x, y, z) = 63 features",
+            "Norm      : Wrist-centered, max-Euclidean scaled",
+            "Geom      : +15 invariant distances & curl ratios (78 total)",
+            "RF Config : 200 trees, max_depth=18, balanced",
+            "SVM Config: RBF kernel, C=5.0 + StandardScaler",
+            "KNN Config: k=7, distance-weighted + StandardScaler",
+            "Live Gate : 3-frame vote, min_votes=2, 0.35s cooldown",
+            "Sessions  : " + ", ".join(f"{k}:{v}" for k, v in sorted(data.session_counts.items())),
+        ]
+        for line in pipeline_lines:
+            screen.blit(self._font_xs.render(line, True, (220, 235, 248)), (right.left + 14, y2))
+            y2 += 24
 
     # ------------------------------------------------------------------
     # Shared HUD & Overlays
@@ -844,11 +1363,19 @@ class GameRenderer:
         screen.blit(panel, (px, py))
         pygame.draw.rect(screen, (110, 255, 190), pygame.Rect(px, py, panel.get_width(), panel.get_height()), 2, border_radius=12)
 
-        title = self._font_md.render("DR. VANCE — SECTOR 4 ENGINEER (Fist to Close)", True, (130, 255, 200))
-        screen.blit(title, (width // 2 - title.get_width() // 2, py + 14))
+        title = self._font_md.render("DR. VANCE — SECTOR 4 ENGINEER (Pinch/Hold to Ask | Fist=Close)", True, (130, 255, 200))
+        screen.blit(title, (px + 74, py + 14))
+
+        # Character portrait badge on top-left of dialogue panel
+        p_cx, p_cy = px + 38, py + 44
+        pygame.draw.circle(screen, (22, 36, 56), (p_cx, p_cy), 24)
+        pygame.draw.circle(screen, (110, 255, 190), (p_cx, p_cy), 24, 2)
+        pygame.draw.circle(screen, (224, 188, 162), (p_cx, p_cy - 2), 11)
+        pygame.draw.rect(screen, (16, 36, 52), pygame.Rect(p_cx - 9, p_cy - 5, 18, 6), border_radius=2)
+        pygame.draw.rect(screen, (110, 255, 190), pygame.Rect(p_cx - 9, p_cy - 5, 18, 6), 1, border_radius=2)
 
         reply_surf = self._font_sm.render(state.npc_line, True, (235, 245, 255))
-        screen.blit(reply_surf, (width // 2 - reply_surf.get_width() // 2, py + 52))
+        screen.blit(reply_surf, (px + 74, py + 46))
 
         active = state.hovered_target or state.selected_target
         for idx, box in enumerate(NPC_DIALOG_BOXES):
@@ -867,7 +1394,7 @@ class GameRenderer:
         screen.blit(panel, (px, py))
         pygame.draw.rect(screen, (235, 195, 90), pygame.Rect(px, py, panel.get_width(), panel.get_height()), 2, border_radius=12)
 
-        title = self._font_md.render("CHEST KEYPAD (Point + Thumbs Up | Fist=Clear/Close)", True, (255, 235, 175))
+        title = self._font_md.render("CHEST KEYPAD (Pinch / Thumbs Up / Hold Point | Fist=Close)", True, (255, 235, 175))
         screen.blit(title, (width // 2 - title.get_width() // 2, py + 12))
 
         slots = [str(state.dials[i]) if i < len(state.dials) else "_" for i in range(3)]
@@ -891,7 +1418,7 @@ class GameRenderer:
         screen.blit(clbl, (clr_rect.centerx - clbl.get_width() // 2, clr_rect.centery - clbl.get_height() // 2))
 
     def _draw_exit_panel(self, screen: pygame.Surface, width: int, height: int, state: GameState) -> None:
-        panel = pygame.Surface((int(width * 0.60), int(height * 0.36)), pygame.SRCALPHA)
+        panel = pygame.Surface((int(width * 0.60), int(height * 0.43)), pygame.SRCALPHA)
         panel.fill((14, 20, 32, 238))
         px = (width - panel.get_width()) // 2
         py = int(height * 0.25)
@@ -910,6 +1437,13 @@ class GameRenderer:
             pygame.draw.rect(screen, (140, 245, 255) if sel else (150, 180, 210), rect, 4 if sel else 2, border_radius=10)
             val = self._font_lg.render(str(EXIT_PAD_VALUES[idx]), True, (255, 255, 255))
             screen.blit(val, (rect.centerx - val.get_width() // 2, rect.centery - val.get_height() // 2))
+
+        clr_rect = _to_px_rect(EXIT_CLEAR_BOX, width, height)
+        sel_c = active == "exit_clear"
+        pygame.draw.rect(screen, (170, 70, 75) if sel_c else (115, 45, 50), clr_rect, border_radius=10)
+        pygame.draw.rect(screen, (255, 180, 180), clr_rect, 3 if sel_c else 2, border_radius=10)
+        clbl = self._font_sm.render("CLEAR CODE", True, (255, 255, 255))
+        screen.blit(clbl, (clr_rect.centerx - clbl.get_width() // 2, clr_rect.centery - clbl.get_height() // 2))
 
     def _draw_completed(self, screen: pygame.Surface, width: int, height: int, state: GameState) -> None:
         overlay = pygame.Surface((width, height), pygame.SRCALPHA)
@@ -960,6 +1494,7 @@ class GameRenderer:
         prediction: GesturePrediction,
         fps: float,
         model_name: str,
+        secondary_prediction: GesturePrediction | None = None,
     ) -> None:
         hud = pygame.Surface((width, 56), pygame.SRCALPHA)
         hud.fill((10, 15, 24, 215))
@@ -968,14 +1503,24 @@ class GameRenderer:
         screen.blit(self._font_sm.render(top_text, True, (235, 242, 250)), (16, 6))
 
         if prediction.status == "no_hand":
-            st_txt, col = "Hand: None", (255, 200, 110)
+            st_txt, col = "Hand 1: None", (255, 200, 110)
         elif prediction.status == "uncertain":
-            st_txt, col = f"Gesture: Uncertain ({prediction.confidence:.2f})", (255, 170, 100)
+            st_txt, col = f"Hand 1: Uncertain ({prediction.confidence:.2f})", (255, 170, 100)
         elif prediction.status == "stabilizing":
-            st_txt, col = f"Gesture: Stabilizing [{prediction.raw_label}]", (170, 215, 255)
+            st_txt, col = f"Hand 1: Stabilizing [{prediction.raw_label}]", (170, 215, 255)
         else:
-            st_txt, col = f"Gesture: {prediction.smoothed_label} ({prediction.confidence:.2f})", (120, 240, 175)
-        screen.blit(self._font_xs.render(st_txt, True, col), (16, 31))
+            st_txt, col = f"Hand 1: {prediction.smoothed_label} ({prediction.confidence:.2f})", (120, 240, 175)
+        h1_surf = self._font_xs.render(st_txt, True, col)
+        screen.blit(h1_surf, (16, 31))
+
+        if secondary_prediction is not None and secondary_prediction.status != "no_hand":
+            if secondary_prediction.status == "stable":
+                h2_txt = f"  |  Hand 2: {secondary_prediction.smoothed_label} ({secondary_prediction.confidence:.2f})"
+                h2_col = (255, 205, 105)
+            else:
+                h2_txt = f"  |  Hand 2: {secondary_prediction.status}"
+                h2_col = (200, 185, 140)
+            screen.blit(self._font_xs.render(h2_txt, True, h2_col), (16 + h1_surf.get_width(), 31))
 
     def _draw_webcam_pip(
         self,

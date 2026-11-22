@@ -51,7 +51,15 @@ EXIT_PAD_BOXES = (
     (0.52, 0.38, 0.09, 0.14),
     (0.64, 0.38, 0.09, 0.14),
 )
+EXIT_CLEAR_BOX = (0.39, 0.56, 0.22, 0.075)
 RESTART_BOX = (0.39, 0.62, 0.22, 0.10)
+
+DWELL_SELECT_SECONDS = 0.85
+
+
+def _is_confirm_gesture(gesture: str | None) -> bool:
+    """Return True for gestures that confirm/select (Pinch or Thumbs Up)."""
+    return gesture in ("pinch", "thumbs_up")
 
 NARRATION_STAGE_1 = (
     "Sector four log: Power failed at three past midnight. "
@@ -167,8 +175,11 @@ class GameState:
     narration_subtitle: str = "Dr. Vance: 'Talk to me for the Cyber Vault code, Holo Core, and Exit Airlock clues!'"
     pending_narration: str | None = None
     replay_requested: bool = False
-    feedback_message: str = "Aim at Dr. Vance + Thumbs Up to talk, or open the Cyber Vault!"
+    feedback_message: str = "Aim at Dr. Vance + Pinch/Thumbs Up to talk, or open the Cyber Vault!"
     feedback_kind: str = "info"  # "info" | "success" | "warning" | "error"
+    dwell_target: str | None = None
+    dwell_progress: float = 0.0
+    dwell_locked: bool = False
     start_time: float = field(default_factory=time.monotonic)
     last_update_time: float = field(default_factory=time.monotonic)
     completion_seconds: float | None = None
@@ -205,6 +216,8 @@ class EscapeRoomGame:
         move_dir: tuple[float, float] = (0.0, 0.0),
         turn_dir: float = 0.0,
         interact_trigger: bool = False,
+        secondary_triggered: str | None = None,
+        secondary_held: str | None = None,
     ) -> GameState:
         """Advance First-Person 3D POV movement and puzzle state by one frame."""
         current_time = time.monotonic() if now is None else now
@@ -213,28 +226,36 @@ class EscapeRoomGame:
         st.last_update_time = current_time
         st.is_moving = False
 
+        aim_xy = pointer_xy
+
         if gesture_status == "uncertain":
-            st.feedback_message = "Aiming... hold a clear gesture to interact"
+            st.feedback_message = "Aiming... Pinch, Thumbs Up, or hold Point to select"
             st.feedback_kind = "info"
 
         if gesture_status == "no_hand":
             st.hovered_target = None
+            st.dwell_target = None
+            st.dwell_progress = 0.0
+            st.dwell_locked = False
             if not (st.menu_open or st.safe_panel_open or st.exit_panel_open or st.stage == "completed"):
                 if turn_dir != 0.0:
                     st.player_yaw += turn_dir * 2.1 * max(dt, 1.0 / 30.0)
                 if move_dir != (0.0, 0.0):
                     self._move_player_by_dir(move_dir, dt)
-                self._update_pov_hover(None)
-                if interact_trigger:
-                    triggered_gesture = "thumbs_up"
-                    if st.stage == "chest_lock":
-                        self._update_stage_1(triggered_gesture, None)
+                self._update_pov_hover(aim_xy)
+                if interact_trigger or _is_confirm_gesture(secondary_triggered):
+                    eff_t = "thumbs_up"
+                    if st.nearby_station == "npc":
+                        st.npc_dialog_open = True
+                        st.selected_target = "npc_0"
+                    elif st.stage == "chest_lock":
+                        self._update_stage_1(eff_t, aim_xy)
                     elif st.stage == "final_exit":
-                        self._update_stage_3(triggered_gesture, None, current_time)
+                        self._update_stage_3(eff_t, aim_xy, current_time)
             return st
 
         # Global menu & narration replay controls
-        if triggered_gesture == "open_palm":
+        if triggered_gesture == "open_palm" or secondary_triggered == "open_palm":
             st.menu_open = True
             st.feedback_message = "Controls & Log opened (Fist to close)."
             st.feedback_kind = "info"
@@ -253,21 +274,14 @@ class EscapeRoomGame:
                 st.feedback_kind = "info"
                 return st
             if st.safe_panel_open:
-                if st.dials:
-                    st.dials.clear()
-                    st.feedback_message = "Cleared Chest code."
-                else:
-                    st.safe_panel_open = False
-                    st.feedback_message = "Closed Chest keypad."
+                # Never clear entered digits on Fist — accidental Fist misdetections must not wipe the code.
+                st.safe_panel_open = False
+                st.feedback_message = "Closed Chest keypad (entered digits preserved)."
                 st.feedback_kind = "info"
                 return st
             if st.exit_panel_open:
-                if st.exit_entered:
-                    st.exit_entered.clear()
-                    st.feedback_message = "Cleared exit keypad."
-                else:
-                    st.exit_panel_open = False
-                    st.feedback_message = "Closed Exit keypad."
+                st.exit_panel_open = False
+                st.feedback_message = "Closed Exit keypad (entered digits preserved)."
                 st.feedback_kind = "info"
                 return st
             if st.artifact_grabbed:
@@ -276,7 +290,7 @@ class EscapeRoomGame:
                 st.feedback_kind = "info"
                 return st
 
-        if triggered_gesture == "two_fingers":
+        if triggered_gesture == "two_fingers" or secondary_triggered == "two_fingers":
             if st.stage == "mystery_object" and st.artifact_grabbed:
                 st.artifact_angle = (st.artifact_angle + 90) % 360
                 st.feedback_message = f"Rotated Holo Core to {st.artifact_angle} deg."
@@ -292,34 +306,89 @@ class EscapeRoomGame:
         if not (st.safe_panel_open or st.exit_panel_open or st.npc_dialog_open or st.stage == "completed"):
             if move_dir != (0.0, 0.0):
                 self._move_player_by_dir(move_dir, dt)
-            elif held_gesture == "pointing" and pointer_xy is not None:
-                target_world = pov_unproject(pointer_xy, st, pointer_xy)
+            elif held_gesture == "pointing" and aim_xy is not None:
+                target_world = pov_unproject(aim_xy, st, aim_xy)
                 self._move_player_toward(target_world, dt)
 
-        self._update_pov_hover(pointer_xy)
+        self._update_pov_hover(aim_xy)
         eff_trigger = "thumbs_up" if interact_trigger else triggered_gesture
+        if eff_trigger is None and _is_confirm_gesture(secondary_triggered):
+            eff_trigger = secondary_triggered
+
+        # Dwell-to-select when holding Point steadily over an interactive target/button
+        dwell_key = self._current_dwell_key(aim_xy)
+        if dwell_key is not None and held_gesture == "pointing" and aim_xy is not None:
+            if dwell_key != st.dwell_target:
+                st.dwell_target = dwell_key
+                st.dwell_progress = 0.0
+                st.dwell_locked = False
+            elif not st.dwell_locked:
+                st.dwell_progress = min(1.0, st.dwell_progress + dt / DWELL_SELECT_SECONDS)
+                if st.dwell_progress >= 1.0:
+                    st.dwell_locked = True
+                    st.dwell_progress = 0.0
+                    if eff_trigger is None:
+                        eff_trigger = "pinch"
+        else:
+            st.dwell_target = None
+            st.dwell_progress = 0.0
+            st.dwell_locked = False
 
         if st.npc_dialog_open:
-            self._update_npc_dialog(eff_trigger, pointer_xy)
+            self._update_npc_dialog(eff_trigger, aim_xy)
             return st
 
-        if eff_trigger == "thumbs_up" and st.nearby_station == "npc":
+        aiming_at_core = (
+            st.stage == "mystery_object"
+            and aim_xy is not None
+            and _distance(aim_xy, pov_project(st.artifact_pos, st, aim_xy)) <= INTERACT_RADIUS
+        )
+        if _is_confirm_gesture(eff_trigger) and st.nearby_station == "npc" and not aiming_at_core:
             st.npc_dialog_open = True
             st.selected_target = "npc_0"
-            st.feedback_message = "Talking to Dr. Vance (Point + Thumbs Up on a question, Fist to close)."
+            st.dwell_locked = True
+            st.feedback_message = "Talking to Dr. Vance (Pinch / Thumbs Up / Hold Point on a question)."
             st.feedback_kind = "info"
             return st
 
         if st.stage == "chest_lock":
-            self._update_stage_1(eff_trigger, pointer_xy)
+            self._update_stage_1(eff_trigger, aim_xy)
         elif st.stage == "mystery_object":
-            self._update_stage_2(held_gesture, pointer_xy)
+            effective_held = "pinch" if (held_gesture == "pinch" or secondary_held == "pinch") else held_gesture
+            self._update_stage_2(effective_held, aim_xy)
         elif st.stage == "final_exit":
-            self._update_stage_3(eff_trigger, pointer_xy, current_time)
+            self._update_stage_3(eff_trigger, aim_xy, current_time)
         elif st.stage == "completed":
-            self._update_completed(eff_trigger, pointer_xy)
+            self._update_completed(eff_trigger, aim_xy)
 
         return st
+
+    def _current_dwell_key(self, pointer_xy: tuple[float, float] | None) -> str | None:
+        if pointer_xy is None:
+            return None
+        st = self.state
+        if st.npc_dialog_open:
+            for idx, box in enumerate(NPC_DIALOG_BOXES):
+                if _point_in_box(pointer_xy, box):
+                    return f"npc_{idx}"
+            return None
+        if st.safe_panel_open:
+            if _point_in_box(pointer_xy, CHEST_CLEAR_BOX):
+                return "clear"
+            for idx, box in enumerate(CHEST_PAD_BOXES):
+                if _point_in_box(pointer_xy, box):
+                    return f"pad_{idx}"
+            return None
+        if st.exit_panel_open:
+            if _point_in_box(pointer_xy, EXIT_CLEAR_BOX):
+                return "exit_clear"
+            for idx, box in enumerate(EXIT_PAD_BOXES):
+                if _point_in_box(pointer_xy, box):
+                    return f"exit_{idx}"
+            return None
+        if st.stage == "completed":
+            return "restart" if _point_in_box(pointer_xy, RESTART_BOX) else None
+        return f"station_{st.nearby_station}" if st.nearby_station is not None else None
 
     def _update_npc_dialog(
         self,
@@ -336,7 +405,7 @@ class EscapeRoomGame:
         if hovered is not None:
             st.selected_target = hovered
         active = hovered or st.selected_target
-        if triggered_gesture == "thumbs_up" and active is not None and active.startswith("npc_"):
+        if _is_confirm_gesture(triggered_gesture) and active is not None and active.startswith("npc_"):
             idx = int(active.split("_")[1])
             topic, _, reply = NPC_DIALOG_OPTIONS[idx]
             st.npc_topic = topic
@@ -459,7 +528,7 @@ class EscapeRoomGame:
     ) -> None:
         st = self.state
         if not st.safe_panel_open:
-            if triggered_gesture == "thumbs_up":
+            if _is_confirm_gesture(triggered_gesture):
                 if st.nearby_station == "terminal":
                     st.replay_requested = True
                     st.feedback_message = "Terminal: Replaying Sector 4 audio log..."
@@ -467,10 +536,10 @@ class EscapeRoomGame:
                 elif st.nearby_station == "safe":
                     st.safe_panel_open = True
                     st.selected_target = "pad_2"  # Default highlight on '3'
-                    st.feedback_message = "Point at digits 0-9 + Thumbs Up to enter the 3-digit code!"
+                    st.feedback_message = "Point + Pinch/Thumbs Up (or hold Point) to enter the 3-digit code!"
                     st.feedback_kind = "info"
                 else:
-                    st.feedback_message = "Aim at the Left Cipher Wall or Center Chest + Thumbs Up!"
+                    st.feedback_message = "Aim at the Left Cipher Wall or Center Chest + Pinch/Thumbs Up!"
                     st.feedback_kind = "warning"
             return
 
@@ -488,7 +557,7 @@ class EscapeRoomGame:
             st.selected_target = hovered
         active_target = hovered or st.selected_target
 
-        if triggered_gesture == "thumbs_up":
+        if _is_confirm_gesture(triggered_gesture):
             if active_target == "clear":
                 st.dials.clear()
                 st.feedback_message = "Cleared Chest code."
@@ -552,7 +621,7 @@ class EscapeRoomGame:
     ) -> None:
         st = self.state
         if not st.exit_panel_open:
-            if triggered_gesture == "thumbs_up":
+            if _is_confirm_gesture(triggered_gesture):
                 if st.nearby_station == "exit_door":
                     st.exit_panel_open = True
                     st.selected_target = "exit_0"
@@ -564,37 +633,46 @@ class EscapeRoomGame:
             return
 
         hovered: str | None = None
-        for idx, box in enumerate(EXIT_PAD_BOXES):
-            if _point_in_box(pointer_xy, box):
-                hovered = f"exit_{idx}"
-                break
+        if _point_in_box(pointer_xy, EXIT_CLEAR_BOX):
+            hovered = "exit_clear"
+        else:
+            for idx, box in enumerate(EXIT_PAD_BOXES):
+                if _point_in_box(pointer_xy, box):
+                    hovered = f"exit_{idx}"
+                    break
         st.hovered_target = hovered
         if hovered is not None:
             st.selected_target = hovered
         active_target = hovered or st.selected_target
 
-        if triggered_gesture == "thumbs_up" and active_target is not None and active_target.startswith("exit_"):
-            idx = int(active_target.split("_")[1])
-            digit = EXIT_PAD_VALUES[idx]
-            st.exit_entered.append(digit)
-            st.feedback_message = f"Entered {digit} ({len(st.exit_entered)}/3)."
-            st.feedback_kind = "info"
+        if _is_confirm_gesture(triggered_gesture):
+            if active_target == "exit_clear":
+                st.exit_entered.clear()
+                st.feedback_message = "Cleared exit keypad."
+                st.feedback_kind = "info"
+                return
+            if active_target is not None and active_target.startswith("exit_"):
+                idx = int(active_target.split("_")[1])
+                digit = EXIT_PAD_VALUES[idx]
+                st.exit_entered.append(digit)
+                st.feedback_message = f"Entered {digit} ({len(st.exit_entered)}/3)."
+                st.feedback_kind = "info"
 
-            if len(st.exit_entered) == len(st.exit_target):
-                if tuple(st.exit_entered) == st.exit_target:
-                    st.stage = "completed"
-                    st.exit_panel_open = False
-                    st.hovered_target = None
-                    st.selected_target = None
-                    st.completion_seconds = round(current_time - st.start_time, 1)
-                    st.narration_subtitle = NARRATION_WIN
-                    st.pending_narration = NARRATION_WIN
-                    st.feedback_message = "DOOR UNLOCKED! You escaped Sector 4!"
-                    st.feedback_kind = "success"
-                else:
-                    st.exit_entered.clear()
-                    st.feedback_message = "Wrong sequence! Two Fingers to replay narration."
-                    st.feedback_kind = "error"
+                if len(st.exit_entered) == len(st.exit_target):
+                    if tuple(st.exit_entered) == st.exit_target:
+                        st.stage = "completed"
+                        st.exit_panel_open = False
+                        st.hovered_target = None
+                        st.selected_target = None
+                        st.completion_seconds = round(current_time - st.start_time, 1)
+                        st.narration_subtitle = NARRATION_WIN
+                        st.pending_narration = NARRATION_WIN
+                        st.feedback_message = "DOOR UNLOCKED! You escaped Sector 4!"
+                        st.feedback_kind = "success"
+                    else:
+                        st.exit_entered.clear()
+                        st.feedback_message = "Wrong sequence! Two Fingers to replay narration."
+                        st.feedback_kind = "error"
 
     def _update_completed(
         self,
@@ -607,5 +685,5 @@ class EscapeRoomGame:
         if hovered is not None:
             st.selected_target = hovered
         active_target = hovered or st.selected_target
-        if triggered_gesture == "thumbs_up" and active_target == "restart":
+        if _is_confirm_gesture(triggered_gesture) and active_target == "restart":
             self.restart()

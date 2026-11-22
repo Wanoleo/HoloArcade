@@ -268,3 +268,45 @@ class GestureRecognizer:
             confidence=confidence,
             latency_ms=latency_ms,
         )
+
+
+class DualHandGestureRecognizer:
+    """Simultaneously tracks and smooths gestures for primary and secondary hands."""
+
+    def __init__(
+        self,
+        model_path: str | Path = DEFAULT_MODEL_PATH,
+        window_size: int = 3,
+        confidence_threshold: float = 0.50,
+        min_votes: int = 2,
+        cooldown_seconds: float = 0.35,
+    ) -> None:
+        self.primary = GestureRecognizer(
+            model_path=model_path,
+            window_size=window_size,
+            confidence_threshold=confidence_threshold,
+            min_votes=min_votes,
+            cooldown_seconds=cooldown_seconds,
+        )
+        self.secondary = GestureRecognizer(
+            model_path=model_path,
+            window_size=window_size,
+            confidence_threshold=confidence_threshold,
+            min_votes=min_votes,
+            cooldown_seconds=cooldown_seconds,
+        )
+
+    def reset(self) -> None:
+        """Reset smoothing and trigger state for both hands."""
+        self.primary.reset()
+        self.secondary.reset()
+
+    def predict(
+        self,
+        detection: HandDetectionResult,
+        now: float | None = None,
+    ) -> tuple[GesturePrediction, GesturePrediction]:
+        """Return (primary_prediction, secondary_prediction) for the current frame."""
+        p1 = self.primary.predict(detection, now=now)
+        p2 = self.secondary.predict(detection.secondary_as_result, now=now)
+        return p1, p2

@@ -10,19 +10,19 @@
   ],
   "models": {
     "knn": {
-      "accuracy": 0.7007,
-      "f1_macro": 0.6865,
-      "latency_ms": 1.0978
+      "accuracy": 0.9202,
+      "f1_macro": 0.917,
+      "latency_ms": 1.2398
     },
     "svm": {
-      "accuracy": 0.7575,
-      "f1_macro": 0.7635,
-      "latency_ms": 0.5598
+      "accuracy": 0.9289,
+      "f1_macro": 0.9286,
+      "latency_ms": 0.5549
     },
     "random_forest": {
-      "accuracy": 0.8445,
-      "f1_macro": 0.8418,
-      "latency_ms": 13.7649
+      "accuracy": 0.9409,
+      "f1_macro": 0.941,
+      "latency_ms": 13.4606
     }
   }
 }

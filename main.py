@@ -13,12 +13,14 @@ import sys
 
 import pygame
 
+from src.board_game import HoloBoardGame
 from src.camera import CameraError, WebcamCapture, bgr_to_pygame_surface
-from src.game_logic import EscapeRoomGame, _point_in_box
-from src.gesture_recognition import DEFAULT_MODEL_PATH, GestureRecognizer, PointerSmoother
+from src.game_logic import EscapeRoomGame, _is_confirm_gesture, _point_in_box
+from src.gesture_recognition import DEFAULT_MODEL_PATH, DualHandGestureRecognizer, PointerSmoother
 from src.hand_detection import HandTracker, draw_hand_landmarks
 from src.narrator import Narrator
-from src.renderer import HUB_ESCAPE_BOX, HUB_SOCCER_BOX, GameRenderer
+from src.renderer import HUB_BOARD_BOX, HUB_ESCAPE_BOX, HUB_REPORT_BOX, HUB_SOCCER_BOX, GameRenderer
+from src.report_view import HoloReportScreen
 from src.soccer_game import HoloSoccerGame
 
 
@@ -38,7 +40,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--game",
-        choices=("hub", "escape", "soccer"),
+        choices=("hub", "escape", "soccer", "board", "report"),
         default="hub",
         help="Initial screen (default: hub).",
     )
@@ -65,10 +67,12 @@ def run_game(
 ) -> int:
     """Launch the HoloArcade webcam + ML gesture game loop."""
     try:
-        recognizer = GestureRecognizer(model_path=model_path)
+        recognizer = DualHandGestureRecognizer(model_path=model_path)
         pointer_smoother = PointerSmoother(alpha=0.25, deadzone=0.004)
         escape_game = EscapeRoomGame()
         soccer_game = HoloSoccerGame()
+        board_game = HoloBoardGame()
+        report_screen = HoloReportScreen()
         narrator = Narrator(enabled=(max_frames == 0))
         active_mode = initial_mode
         hub_selected: str | None = None
@@ -116,12 +120,30 @@ def run_game(
                             active_mode = "soccer"
                             soccer_game.restart()
                             narrator.stop()
+                        elif event.key == pygame.K_3 and active_mode == "hub":
+                            active_mode = "board"
+                            board_game.restart()
+                            narrator.stop()
+                        elif event.key in (pygame.K_4, pygame.K_e) and active_mode == "hub":
+                            active_mode = "report"
+                            report_screen.refresh()
+                            narrator.stop()
+                        elif event.key == pygame.K_1 and active_mode == "report":
+                            report_screen.state.active_tab = "overview"
+                        elif event.key == pygame.K_2 and active_mode == "report":
+                            report_screen.state.active_tab = "classes"
+                        elif event.key == pygame.K_3 and active_mode == "report":
+                            report_screen.state.active_tab = "runtime"
                         elif event.key == pygame.K_r:
                             recognizer.reset()
                             if active_mode == "escape":
                                 escape_game.restart()
                             elif active_mode == "soccer":
                                 soccer_game.restart()
+                            elif active_mode == "board":
+                                board_game.restart()
+                            elif active_mode == "report":
+                                report_screen.refresh()
                         elif event.key == pygame.K_F11:
                             is_fullscreen = not is_fullscreen
                             if is_fullscreen:
@@ -137,9 +159,16 @@ def run_game(
                     current_frame = cam.read_frame()
 
                 detection = tracker.detect(current_frame)
-                prediction = recognizer.predict(detection)
+                prediction, sec_prediction = recognizer.predict(detection)
+                in_escape_panel = active_mode == "escape" and (
+                    escape_game.state.safe_panel_open
+                    or escape_game.state.exit_panel_open
+                    or escape_game.state.npc_dialog_open
+                )
                 freeze_ptr = active_mode in ("hub", "escape") and (
-                    prediction.status == "stabilizing" or prediction.smoothed_label == "thumbs_up"
+                    prediction.status == "stabilizing"
+                    or prediction.smoothed_label == "thumbs_up"
+                    or (in_escape_panel and prediction.smoothed_label == "pinch")
                 )
                 smooth_pointer = pointer_smoother.update(detection.pointer_xy, freeze=freeze_ptr)
 
@@ -152,10 +181,17 @@ def run_game(
                         hovered = "escape"
                     elif _point_in_box(smooth_pointer, HUB_SOCCER_BOX):
                         hovered = "soccer"
+                    elif _point_in_box(smooth_pointer, HUB_BOARD_BOX):
+                        hovered = "board"
+                    elif _point_in_box(smooth_pointer, HUB_REPORT_BOX):
+                        hovered = "report"
                     if hovered is not None:
                         hub_selected = hovered
                     target = hovered or hub_selected
-                    if prediction.triggered_gesture == "thumbs_up" and target is not None:
+                    hub_confirm = _is_confirm_gesture(prediction.triggered_gesture) or _is_confirm_gesture(
+                        sec_prediction.triggered_gesture
+                    )
+                    if hub_confirm and target is not None:
                         active_mode = target
                         if active_mode == "escape":
                             escape_game.restart()
@@ -164,6 +200,10 @@ def run_game(
                                 narrator.speak(pending)
                         elif active_mode == "soccer":
                             soccer_game.restart()
+                        elif active_mode == "board":
+                            board_game.restart()
+                        elif active_mode == "report":
+                            report_screen.refresh()
                     renderer.render_hub(
                         screen=screen,
                         camera_surface=camera_surface,
@@ -172,6 +212,7 @@ def run_game(
                         hovered_card=target,
                         fps=clock.get_fps(),
                         model_name=model_path.name,
+                        secondary_prediction=sec_prediction,
                     )
                 elif active_mode == "escape":
                     keys = pygame.key.get_pressed()
@@ -189,6 +230,8 @@ def run_game(
                         move_dir=(mx, my),
                         turn_dir=turn,
                         interact_trigger=interact,
+                        secondary_triggered=sec_prediction.triggered_gesture,
+                        secondary_held=sec_prediction.smoothed_label,
                     )
                     pending, replay = escape_game.consume_narration_events()
                     if pending:
@@ -203,12 +246,18 @@ def run_game(
                         pointer_xy=smooth_pointer,
                         fps=clock.get_fps(),
                         model_name=model_path.name,
+                        secondary_prediction=sec_prediction,
                     )
                 elif active_mode == "soccer":
                     keys = pygame.key.get_pressed()
                     mx = float(keys[pygame.K_d] or keys[pygame.K_RIGHT]) - float(keys[pygame.K_a] or keys[pygame.K_LEFT])
                     my = float(keys[pygame.K_s] or keys[pygame.K_DOWN]) - float(keys[pygame.K_w] or keys[pygame.K_UP])
                     kick_trig = "shoot" if keys[pygame.K_SPACE] else ("pass" if keys[pygame.K_e] else None)
+                    if kick_trig is None:
+                        if sec_prediction.triggered_gesture == "fist":
+                            kick_trig = "shoot"
+                        elif sec_prediction.triggered_gesture == "two_fingers":
+                            kick_trig = "pass"
                     s_state = soccer_game.update(
                         triggered_gesture=prediction.triggered_gesture,
                         held_gesture=prediction.smoothed_label,
@@ -225,6 +274,50 @@ def run_game(
                         pointer_xy=smooth_pointer,
                         fps=clock.get_fps(),
                         model_name=model_path.name,
+                        secondary_prediction=sec_prediction,
+                    )
+                elif active_mode == "board":
+                    b_state = board_game.update(
+                        triggered_gesture=prediction.triggered_gesture,
+                        held_gesture=prediction.smoothed_label,
+                        pointer_xy=smooth_pointer,
+                        gesture_status=prediction.status,
+                        secondary_triggered=sec_prediction.triggered_gesture,
+                        secondary_held=sec_prediction.smoothed_label,
+                    )
+                    speech = board_game.consume_speech()
+                    if speech:
+                        narrator.speak(speech)
+                    renderer.render_board(
+                        screen=screen,
+                        camera_surface=camera_surface,
+                        state=b_state,
+                        prediction=prediction,
+                        pointer_xy=smooth_pointer,
+                        fps=clock.get_fps(),
+                        model_name=model_path.name,
+                        secondary_prediction=sec_prediction,
+                    )
+                elif active_mode == "report":
+                    rep_state = report_screen.update(
+                        triggered_gesture=prediction.triggered_gesture,
+                        held_gesture=prediction.smoothed_label,
+                        pointer_xy=smooth_pointer,
+                        gesture_status=prediction.status,
+                        secondary_triggered=sec_prediction.triggered_gesture,
+                    )
+                    if rep_state.return_to_hub:
+                        active_mode = "hub"
+                    renderer.render_report(
+                        screen=screen,
+                        camera_surface=camera_surface,
+                        data=report_screen.data,
+                        state=rep_state,
+                        prediction=prediction,
+                        pointer_xy=smooth_pointer,
+                        fps=clock.get_fps(),
+                        model_name=model_path.name,
+                        secondary_prediction=sec_prediction,
                     )
 
                 pygame.display.flip()
