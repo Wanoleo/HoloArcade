@@ -182,9 +182,26 @@ Watch the HoloArcade demonstration:
 - The included dataset contains gesture-landmark observations. Confirm participant consent and permissions before redistributing collected data or derivative datasets.
 - No generalization claim is made beyond the committed evaluation setup.
 
-## Contributors and License
+## 👥 Contributors and License
 
-Developed as a university machine-learning project. Collaborator names and individual contributions should be added after the team confirms how it wants to be credited.
+### Project Contributors
 
-**License:** No open-source license is included at present. Public visibility alone does not grant permission to reuse or redistribute the code. Repository owners should choose a license before inviting outside reuse.
+**HoloArcade: A Webcam-Based Gesture-Controlled Game Suite** was developed as a university Machine Learning semester project at **Dawood University of Engineering & Technology (DUET), Karachi, Pakistan**.
+
+**Team Members:**
+
+- **Wania Arif** — [GitHub](https://github.com/Wanoleo)
+- **Abdullah Shayan** — [GitHub](https://github.com/abdullahshono2006-ship-it)
+- **Areeba Azam** — [GitHub](https://github.com/areebaazam1675-glitch)
+- **Ibad Akhtar** — [GitHub](https://github.com/VenomFather)
+
+### 📜 License
+
+This project was developed for academic and educational purposes.
+
+**Copyright © 2026 HoloArcade Contributors.**
+
+No open-source license has been assigned to this repository. All rights are reserved by the respective copyright holders. Public access to the repository does not automatically grant permission to copy, modify, or redistribute its contents.
+
+For reuse, collaboration, or licensing inquiries, please contact the project contributors.
 
