@@ -193,7 +193,7 @@ Watch the HoloArcade demonstration:
 - **Wania Arif** — [GitHub](https://github.com/Wanoleo)
 - **Abdullah Shayan** — [GitHub](https://github.com/abdullahshono2006-ship-it)
 - **Areeba Azam** — [GitHub](https://github.com/areebaazam1675-glitch)
-- **Ibad Akhtar** — [GitHub](https://github.com/VenomFather)
+- **Ibad Iftikhar** — [GitHub](https://github.com/VenomFather)
 
 ### 📜 License
 
