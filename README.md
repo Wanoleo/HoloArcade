@@ -169,6 +169,11 @@ HoloArcade/
 ```
 
 This command runs the committed test suite. It does not replace an actual end-to-end test with a working webcam on the target machine.
+## 🎮 Project Demo
+
+Watch the HoloArcade demonstration:
+
+[📥 Download HoloArcade Demo Video](https://github.com/Wanoleo/HoloArcade/raw/refs/heads/main/demo_video.mp4)
 
 ## Limitations and Responsible Use
 
